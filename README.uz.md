@@ -1,6 +1,6 @@
-# Password Finder
+# Rust Password Brute Force
 
-Parolni topish uchun ishlatiladigan tezkor va samarali Rust dasturi. Dastur berilgan foydalanuvchi nomi uchun to'g'ri parolni topishga urinadi.
+Optimallashtirilgan algoritmlardan foydalangan holda Rust dasturlash tilida yozilgan parolni topish vositasi. Server bilan bog'liq muammolar bo'yicha avtomatik qayta urinib ko'rish va jarayonni kuzatish kabi xususiyatlarga ega va tezlik uchun mo'ljallangan.
 
 ## 🌟 Xususiyatlari
 

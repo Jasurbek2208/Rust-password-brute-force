@@ -1,6 +1,6 @@
-# Password Finder
+# Rust Password Brute Force
 
-A fast and efficient Rust program for password recovery. The program attempts to find the correct password for a given username.
+A password finder tool using optimized algorithms in Rust. Designed for speed with features like auto-retry on server issues and progress tracking.
 
 ## 🌟 Features
 
